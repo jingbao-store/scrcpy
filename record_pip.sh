@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 画中画录制脚本 - 分别录制display和camera,然后在PC端合成
+# 分离式双路录制脚本 - 分别录制display和camera供后期编辑使用
 # 作者: AI Assistant
 # 日期: 2025-10-31
 
@@ -19,15 +19,43 @@ OUTPUT_DIR="pip_recordings"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 DISPLAY_VIDEO="${OUTPUT_DIR}/display_${TIMESTAMP}.mp4"
 CAMERA_VIDEO="${OUTPUT_DIR}/camera_${TIMESTAMP}.mp4"
-FINAL_VIDEO="${OUTPUT_DIR}/pip_${TIMESTAMP}.mp4"
 
-# FFmpeg路径
-FFMPEG="/Users/nicholasmac/Downloads/FFmpeg/ffmpeg"
+# Camera竖屏模式 (1=竖屏, 0=横屏, 可通过环境变量 CAMERA_PORTRAIT 覆盖)
+CAMERA_PORTRAIT="${CAMERA_PORTRAIT:-0}"
+# Camera画面朝向 (支持 0/90/180/270 或 flip variants, 可通过环境变量 CAMERA_ORIENTATION 直接覆盖)
+CAMERA_ORIENTATION_OVERRIDE="${CAMERA_ORIENTATION:-}"
+# Camera分辨率(如 1080x1920), 可通过环境变量 CAMERA_SIZE 指定
+CAMERA_SIZE_OVERRIDE="${CAMERA_SIZE:-}"
+# Camera宽高比(如 9:16), 与 CAMERA_SIZE 互斥, 可通过环境变量 CAMERA_AR 指定
+CAMERA_AR_OVERRIDE="${CAMERA_AR:-}"
 
-# PIP设置
-PIP_POSITION="BR"  # TL=左上, TR=右上, BL=左下, BR=右下
-PIP_WIDTH_RATIO=0.25  # PIP宽度占主画面的比例
-PIP_MARGIN=20  # PIP距离边缘的像素
+if [ "${CAMERA_PORTRAIT}" = "1" ]; then
+    DEFAULT_CAMERA_ORIENTATION="90"
+    DEFAULT_CAMERA_SIZE=""
+    DEFAULT_CAMERA_AR="9:16"
+else
+    DEFAULT_CAMERA_ORIENTATION=""
+    DEFAULT_CAMERA_SIZE=""
+    DEFAULT_CAMERA_AR=""
+fi
+
+if [ -n "${CAMERA_ORIENTATION_OVERRIDE}" ]; then
+    RESOLVED_CAMERA_ORIENTATION="${CAMERA_ORIENTATION_OVERRIDE}"
+else
+    RESOLVED_CAMERA_ORIENTATION="${DEFAULT_CAMERA_ORIENTATION}"
+fi
+
+if [ -n "${CAMERA_SIZE_OVERRIDE}" ]; then
+    RESOLVED_CAMERA_SIZE="${CAMERA_SIZE_OVERRIDE}"
+    RESOLVED_CAMERA_AR=""
+else
+    RESOLVED_CAMERA_SIZE="${DEFAULT_CAMERA_SIZE}"
+    if [ -n "${CAMERA_AR_OVERRIDE}" ]; then
+        RESOLVED_CAMERA_AR="${CAMERA_AR_OVERRIDE}"
+    else
+        RESOLVED_CAMERA_AR="${DEFAULT_CAMERA_AR}"
+    fi
+fi
 
 # 函数:打印彩色信息
 info() {
@@ -77,7 +105,7 @@ if [ ! -x "./run" ]; then
 fi
 
 info "========================================="
-info "  画中画录制 - 分离式录制方案"
+info "  display & camera 分离录制方案"
 info "========================================="
 info "输出目录: ${OUTPUT_DIR}"
 info "时间戳: ${TIMESTAMP}"
@@ -86,7 +114,7 @@ warn "请注意:"
 warn "1. 将同时启动两个scrcpy窗口(display和camera)"
 warn "2. 请保持两个窗口都在运行"
 warn "3. 按 Ctrl+C 停止录制"
-warn "4. 停止后将自动合成画中画视频"
+warn "4. 停止后会在输出目录保留原始视频, 需自行后期合成"
 info ""
 info "3秒后自动开始录制..."
 sleep 3 
@@ -105,8 +133,38 @@ fi
 success "Display录制已启动 (PID: ${DISPLAY_PID})"
 
 # 步骤2: 启动camera录制
+CAMERA_ARGS=()
+
+if [ -n "${RESOLVED_CAMERA_ORIENTATION}" ]; then
+    ORIENTATION_DISPLAY="${RESOLVED_CAMERA_ORIENTATION#@}"
+    CAPTURE_ORIENTATION="${RESOLVED_CAMERA_ORIENTATION}"
+    if [[ "${CAPTURE_ORIENTATION}" != @* ]]; then
+        CAPTURE_ORIENTATION="@${CAPTURE_ORIENTATION}"
+    fi
+
+    if [[ "${ORIENTATION_DISPLAY}" =~ ^[0-9]+$ ]]; then
+        info "Camera画面顺时针旋转: ${ORIENTATION_DISPLAY}° (锁定 ${CAPTURE_ORIENTATION})"
+    else
+        info "Camera画面方向参数: ${ORIENTATION_DISPLAY} (锁定 ${CAPTURE_ORIENTATION})"
+    fi
+
+    CAMERA_ARGS+=("--capture-orientation=${CAPTURE_ORIENTATION}")
+    CAMERA_ARGS+=("--orientation=${ORIENTATION_DISPLAY}")
+    if [[ "${ORIENTATION_DISPLAY}" =~ ^[0-9]+$ ]]; then
+        CAMERA_ARGS+=("--record-orientation=${ORIENTATION_DISPLAY}")
+    fi
+fi
+
+if [ -n "${RESOLVED_CAMERA_SIZE}" ]; then
+    info "Camera分辨率: ${RESOLVED_CAMERA_SIZE}"
+    CAMERA_ARGS+=("--camera-size=${RESOLVED_CAMERA_SIZE}")
+elif [ -n "${RESOLVED_CAMERA_AR}" ]; then
+    info "Camera宽高比: ${RESOLVED_CAMERA_AR}"
+    CAMERA_ARGS+=("--camera-ar=${RESOLVED_CAMERA_AR}")
+fi
+
 info "启动camera录制..."
-./run x --video-source=camera --no-audio --record="${CAMERA_VIDEO}" \
+./run x --video-source=camera --no-audio "${CAMERA_ARGS[@]}" --record="${CAMERA_VIDEO}" \
     --window-title="Camera Recording" \
     > "${OUTPUT_DIR}/camera_${TIMESTAMP}.log" 2>&1 &
 CAMERA_PID=$!
@@ -121,7 +179,7 @@ success "Camera录制已启动 (PID: ${CAMERA_PID})"
 info ""
 success "✓ 两路录制都已启动!"
 info "Display窗口: 主画面"
-info "Camera窗口: 将作为PIP叠加"
+info "Camera窗口: 备用画面"
 info ""
 warn "按 Ctrl+C 停止录制..."
 
@@ -146,57 +204,6 @@ CAMERA_SIZE=$(ls -lh "${CAMERA_VIDEO}" | awk '{print $5}')
 info "Display视频: ${DISPLAY_SIZE}"
 info "Camera视频: ${CAMERA_SIZE}"
 
-# 步骤4: 使用FFmpeg合成画中画
-info ""
-info "开始合成画中画视频..."
-
-# 获取主视频分辨率
-MAIN_WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "${DISPLAY_VIDEO}")
-MAIN_HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "${DISPLAY_VIDEO}")
-
-info "主视频分辨率: ${MAIN_WIDTH}x${MAIN_HEIGHT}"
-
-# 计算PIP尺寸和位置
-PIP_WIDTH=$(echo "${MAIN_WIDTH} * ${PIP_WIDTH_RATIO}" | bc | cut -d. -f1)
-PIP_HEIGHT=$(echo "${PIP_WIDTH} * 9 / 16" | bc)  # 假设16:9比例
-
-case ${PIP_POSITION} in
-    TL) # 左上
-        OVERLAY_X=${PIP_MARGIN}
-        OVERLAY_Y=${PIP_MARGIN}
-        ;;
-    TR) # 右上
-        OVERLAY_X=$((MAIN_WIDTH - PIP_WIDTH - PIP_MARGIN))
-        OVERLAY_Y=${PIP_MARGIN}
-        ;;
-    BL) # 左下
-        OVERLAY_X=${PIP_MARGIN}
-        OVERLAY_Y=$((MAIN_HEIGHT - PIP_HEIGHT - PIP_MARGIN))
-        ;;
-    BR) # 右下
-        OVERLAY_X=$((MAIN_WIDTH - PIP_WIDTH - PIP_MARGIN))
-        OVERLAY_Y=$((MAIN_HEIGHT - PIP_HEIGHT - PIP_MARGIN))
-        ;;
-esac
-
-info "PIP尺寸: ${PIP_WIDTH}x${PIP_HEIGHT}"
-info "PIP位置: (${OVERLAY_X}, ${OVERLAY_Y})"
-
-# FFmpeg合成命令
-${FFMPEG} -y -i "${DISPLAY_VIDEO}" -i "${CAMERA_VIDEO}" \
-    -filter_complex "[1:v]scale=${PIP_WIDTH}:${PIP_HEIGHT}[pip]; \
-                     [0:v][pip]overlay=${OVERLAY_X}:${OVERLAY_Y}" \
-    "${FINAL_VIDEO}" \
-    > "${OUTPUT_DIR}/ffmpeg_${TIMESTAMP}.log" 2>&1
-
-if [ ! -f "${FINAL_VIDEO}" ]; then
-    error "画中画视频合成失败"
-fi
-
-FINAL_SIZE=$(ls -lh "${FINAL_VIDEO}" | awk '{print $5}')
-success "画中画视频已生成: ${FINAL_VIDEO} (${FINAL_SIZE})"
-
-# 步骤5: 保留原始文件
 info ""
 info "原始文件保留在: ${OUTPUT_DIR}"
 info "  - Display: ${DISPLAY_VIDEO}"
@@ -206,9 +213,6 @@ info ""
 success "========================================="
 success "  录制完成!"
 success "========================================="
-success "最终视频: ${FINAL_VIDEO}"
-info ""
-info "可以使用以下命令播放:"
-info "  open \"${FINAL_VIDEO}\""
+info "如需画中画合成, 请使用你熟悉的剪辑工具"
 info ""
 
