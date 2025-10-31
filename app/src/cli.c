@@ -1014,8 +1014,10 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_VIDEO_SOURCE,
         .longopt = "video-source",
         .argdesc = "source",
-        .text = "Select the video source (display or camera).\n"
+        .text = "Select the video source (display, camera or composite).\n"
                 "Camera mirroring requires Android 12+.\n"
+                "Composite mode captures both display and camera simultaneously "
+                "with picture-in-picture layout (requires Android 12+).\n"
                 "Default is display.",
     },
     {
@@ -2033,7 +2035,12 @@ parse_video_source(const char *optarg, enum sc_video_source *source) {
         return true;
     }
 
-    LOGE("Unsupported video source: %s (expected display or camera)", optarg);
+    if (!strcmp(optarg, "composite")) {
+        *source = SC_VIDEO_SOURCE_COMPOSITE;
+        return true;
+    }
+
+    LOGE("Unsupported video source: %s (expected display, camera or composite)", optarg);
     return false;
 }
 
@@ -3140,9 +3147,13 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             } else {
                 opts->audio_source = SC_AUDIO_SOURCE_OUTPUT;
             }
-        } else {
+        } else if (opts->video_source == SC_VIDEO_SOURCE_CAMERA) {
             opts->audio_source = SC_AUDIO_SOURCE_MIC;
             LOGI("Camera video source: microphone audio source selected");
+        } else {
+            // SC_VIDEO_SOURCE_COMPOSITE
+            opts->audio_source = SC_AUDIO_SOURCE_MIC;
+            LOGI("Composite video source: microphone audio source selected");
         }
     }
 

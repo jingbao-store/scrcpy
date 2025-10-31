@@ -18,6 +18,7 @@ import com.genymobile.scrcpy.opengl.OpenGLRunner;
 import com.genymobile.scrcpy.util.Ln;
 import com.genymobile.scrcpy.util.LogUtils;
 import com.genymobile.scrcpy.video.CameraCapture;
+import com.genymobile.scrcpy.video.CompositeCapture;
 import com.genymobile.scrcpy.video.NewDisplayCapture;
 import com.genymobile.scrcpy.video.ScreenCapture;
 import com.genymobile.scrcpy.video.SurfaceCapture;
@@ -71,6 +72,11 @@ public final class Server {
         if (Build.VERSION.SDK_INT < AndroidVersions.API_31_ANDROID_12 && options.getVideoSource() == VideoSource.CAMERA) {
             Ln.e("Camera mirroring is not supported before Android 12");
             throw new ConfigurationException("Camera mirroring is not supported");
+        }
+
+        if (Build.VERSION.SDK_INT < AndroidVersions.API_31_ANDROID_12 && options.getVideoSource() == VideoSource.COMPOSITE) {
+            Ln.e("Composite capture (display + camera) is not supported before Android 12");
+            throw new ConfigurationException("Composite capture is not supported");
         }
 
         if (Build.VERSION.SDK_INT < AndroidVersions.API_29_ANDROID_10) {
@@ -147,8 +153,11 @@ public final class Server {
                         assert options.getDisplayId() != Device.DISPLAY_ID_NONE;
                         surfaceCapture = new ScreenCapture(controller, options);
                     }
-                } else {
+                } else if (options.getVideoSource() == VideoSource.CAMERA) {
                     surfaceCapture = new CameraCapture(options);
+                } else {
+                    // VideoSource.COMPOSITE
+                    surfaceCapture = new CompositeCapture(options);
                 }
                 SurfaceEncoder surfaceEncoder = new SurfaceEncoder(surfaceCapture, videoStreamer, options);
                 asyncProcessors.add(surfaceEncoder);

@@ -52,6 +52,7 @@ enum sc_codec {
 enum sc_video_source {
     SC_VIDEO_SOURCE_DISPLAY,
     SC_VIDEO_SOURCE_CAMERA,
+    SC_VIDEO_SOURCE_COMPOSITE,
 };
 
 enum sc_audio_source {
